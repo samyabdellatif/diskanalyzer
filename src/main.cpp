@@ -7,9 +7,11 @@
 #include "disk_test.h"
 #include "ui.h"
 
+// Custom window messages used to marshal background thread results back to the UI thread.
 constexpr UINT WM_APP_DISKS_LOADED = WM_APP + 1;
 constexpr UINT WM_APP_ANALYSIS_COMPLETE = WM_APP + 2;
 
+// Global state shared between the UI thread and background worker threads.
 static std::vector<DiskInfo> g_disks;
 static std::mutex g_disksMutex;
 static UIHandles g_handles = {};
@@ -20,9 +22,11 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     {
     case WM_CREATE:
     {
+        // Initialize the list view control class before creating controls.
         INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_LISTVIEW_CLASSES };
         InitCommonControlsEx(&icex);
 
+        // Create form controls for disk selection, action button, status text, and results table.
         CreateWindowW(L"STATIC", L"Select drive:", WS_VISIBLE | WS_CHILD, 20, 20, 100, 20, hwnd, reinterpret_cast<HMENU>(nullptr), reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance, nullptr);
         g_handles.hComboDisks = CreateWindowW(L"COMBOBOX", nullptr, WS_VISIBLE | WS_CHILD | WS_BORDER | CBS_DROPDOWNLIST,
             120, 18, 220, 200, hwnd, reinterpret_cast<HMENU>(MAKEINTRESOURCEW(ID_COMBO_DISKS)), reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance, nullptr);
@@ -36,6 +40,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             20, 100, 560, 250, hwnd, reinterpret_cast<HMENU>(MAKEINTRESOURCEW(ID_LISTVIEW_RESULTS)), reinterpret_cast<LPCREATESTRUCT>(lParam)->hInstance, nullptr);
         ListView_SetExtendedListViewStyle(g_handles.hResults, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
+        // Configure the result table columns.
         LVCOLUMNW col = {};
         col.mask = LVCF_TEXT | LVCF_WIDTH;
         col.cx = 220;
@@ -48,6 +53,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         EnableWindow(g_handles.hButtonAnalyze, FALSE);
         SetWindowTextW(g_handles.hStatus, L"Loading disks...");
 
+        // Load physical disks in a background thread so the UI remains responsive.
         std::thread loadThread([hwnd]() {
             auto disks = DiskManager::LoadDisks();
             {
@@ -62,6 +68,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     case WM_COMMAND:
         if (LOWORD(wParam) == ID_BUTTON_ANALYZE)
         {
+            // Read the selected disk index from the combo box.
             int selected = static_cast<int>(SendMessageW(g_handles.hComboDisks, CB_GETCURSEL, 0, 0));
             std::vector<DiskInfo> disksCopy;
             {
@@ -75,6 +82,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 SetWindowTextW(g_handles.hStatus, L"Running tests...");
 
                 DiskInfo selectedDisk = disksCopy[selected];
+                // Perform disk analysis on a background thread to keep the UI responsive.
                 std::thread analysisThread([hwnd, selectedDisk]() {
                     auto results = AnalyzeDisk(selectedDisk);
                     auto* data = new std::vector<DiskTestResult>(std::move(results));
@@ -86,6 +94,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
     case WM_APP_DISKS_LOADED:
     {
+        // UI thread receives the loaded disk list and populates the combo box.
         std::vector<DiskInfo> disksCopy;
         {
             std::scoped_lock lock(g_disksMutex);
@@ -105,6 +114,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     }
     case WM_APP_ANALYSIS_COMPLETE:
     {
+        // Analysis finished in the background; display results in the list view.
         auto* results = reinterpret_cast<std::vector<DiskTestResult>*>(wParam);
         if (results)
         {
@@ -125,6 +135,7 @@ LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
+    // Register the main window class and create the application window.
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -147,6 +158,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
+    // Standard Win32 message loop.
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0))
     {

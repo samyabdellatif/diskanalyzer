@@ -8,6 +8,7 @@
 static const GUID GUID_DEVINTERFACE_DISK =
 { 0x53f56307, 0xb6bf, 0x11d0, {0x94, 0xf2, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b} };
 
+// Convert an ANSI string returned by device descriptors into a UTF-16 wide string.
 static std::wstring ToWide(const char* text)
 {
     if (text == nullptr || *text == '\0')
@@ -27,6 +28,7 @@ static std::wstring ToWide(const char* text)
     return result;
 }
 
+// Read a registry property string from the device information set.
 static std::wstring QueryDeviceProperty(HDEVINFO deviceInfoSet, PSP_DEVINFO_DATA devInfoData, DWORD property)
 {
     wchar_t buffer[512] = {};
@@ -41,6 +43,7 @@ static std::wstring QueryDeviceProperty(HDEVINFO deviceInfoSet, PSP_DEVINFO_DATA
     return L"";
 }
 
+// Query the storage descriptor for device model and serial number.
 static void QueryStorageDescriptor(HANDLE deviceHandle, std::wstring& model, std::wstring& serial)
 {
     STORAGE_PROPERTY_QUERY query = {};
@@ -67,6 +70,7 @@ static void QueryStorageDescriptor(HANDLE deviceHandle, std::wstring& model, std
     }
 }
 
+// Query the physical disk size from the disk geometry ioctl.
 static bool QueryDiskSize(HANDLE deviceHandle, ULONGLONG& sizeBytes)
 {
     DISK_GEOMETRY_EX geometry = {};
@@ -81,6 +85,7 @@ static bool QueryDiskSize(HANDLE deviceHandle, ULONGLONG& sizeBytes)
     return true;
 }
 
+// Enumerate all physical disk devices and collect friendly names, model, serial, and device path.
 std::vector<DiskInfo> DiskManager::LoadDisks()
 {
     std::vector<DiskInfo> disks;

@@ -4,6 +4,7 @@
 
 #pragma comment(lib, "comctl32.lib")
 
+// Register a simple window class used by the application.
 bool RegisterMainWindowClass(HINSTANCE hInstance)
 {
     WNDCLASSEXW wc = {};
@@ -18,6 +19,7 @@ bool RegisterMainWindowClass(HINSTANCE hInstance)
     return RegisterClassExW(&wc) != 0;
 }
 
+// Create the main application window and all child UI controls.
 HWND CreateMainWindow(HINSTANCE hInstance, int nCmdShow)
 {
     INITCOMMONCONTROLSEX icex = { sizeof(icex), ICC_LISTVIEW_CLASSES };
@@ -66,6 +68,7 @@ HWND CreateMainWindow(HINSTANCE hInstance, int nCmdShow)
     return hwnd;
 }
 
+// Populate the disk dropdown with available physical disk names.
 void PopulateDiskCombo(HWND combo, const std::vector<DiskInfo>& disks)
 {
     SendMessageW(combo, CB_RESETCONTENT, 0, 0);
@@ -80,6 +83,7 @@ void PopulateDiskCombo(HWND combo, const std::vector<DiskInfo>& disks)
     }
 }
 
+// Show the analysis results in the list view, one row per test item.
 void ShowAnalysisResults(HWND listView, const std::vector<DiskTestResult>& results)
 {
     ListView_DeleteAllItems(listView);

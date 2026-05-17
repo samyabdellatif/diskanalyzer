@@ -8,6 +8,7 @@
 #include <chrono>
 #include <thread>
 
+// Normalize external command output by stripping carriage returns but preserving line feeds.
 static std::wstring NormalizeCommandOutput(const std::wstring& output)
 {
     std::wstring normalized;
@@ -21,6 +22,7 @@ static std::wstring NormalizeCommandOutput(const std::wstring& output)
     return normalized;
 }
 
+// Run a shell command and capture its stdout/stderr into a wide string.
 static bool RunCommandCaptureOutput(const std::wstring& command, std::wstring& output)
 {
     SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
@@ -56,14 +58,44 @@ static bool RunCommandCaptureOutput(const std::wstring& command, std::wstring& o
     std::string buffer;
     char readBuffer[4096];
     DWORD bytesRead = 0;
-    while (ReadFile(hRead, readBuffer, static_cast<DWORD>(sizeof(readBuffer) - 1), &bytesRead, nullptr) && bytesRead > 0)
+
+    // Read command output until the process exits and the pipe is drained.
+    while (true)
     {
-        readBuffer[bytesRead] = '\0';
-        buffer.append(readBuffer, bytesRead);
+        DWORD bytesAvailable = 0;
+        if (PeekNamedPipe(hRead, nullptr, 0, nullptr, &bytesAvailable, nullptr) && bytesAvailable > 0)
+        {
+            if (ReadFile(hRead, readBuffer, static_cast<DWORD>(sizeof(readBuffer) - 1), &bytesRead, nullptr) && bytesRead > 0)
+            {
+                buffer.append(readBuffer, bytesRead);
+                continue;
+            }
+        }
+
+        DWORD waitResult = WaitForSingleObject(pi.hProcess, 50);
+        if (waitResult == WAIT_OBJECT_0)
+        {
+            // Process exited; drain any remaining output.
+            while (PeekNamedPipe(hRead, nullptr, 0, nullptr, &bytesAvailable, nullptr) && bytesAvailable > 0)
+            {
+                if (ReadFile(hRead, readBuffer, static_cast<DWORD>(sizeof(readBuffer) - 1), &bytesRead, nullptr) && bytesRead > 0)
+                {
+                    buffer.append(readBuffer, bytesRead);
+                    continue;
+                }
+                break;
+            }
+            break;
+        }
+
+        if (waitResult == WAIT_TIMEOUT)
+            continue;
+
+        break;
     }
 
     CloseHandle(hRead);
-    WaitForSingleObject(pi.hProcess, 120000);
+    WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD exitCode = 0;
     GetExitCodeProcess(pi.hProcess, &exitCode);
     CloseHandle(pi.hProcess);
@@ -84,6 +116,7 @@ static bool RunCommandCaptureOutput(const std::wstring& command, std::wstring& o
     return true;
 }
 
+// Query the underlying physical disk number from a physical device handle.
 static bool GetPhysicalDiskNumberFromDevicePath(const std::wstring& devicePath, DWORD& diskNumber)
 {
     HANDLE hDisk = CreateFileW(devicePath.c_str(), GENERIC_READ,
@@ -104,6 +137,7 @@ static bool GetPhysicalDiskNumberFromDevicePath(const std::wstring& devicePath, 
     return true;
 }
 
+// Find a logical drive letter that resides on the selected physical disk.
 static std::wstring FindDriveLetterOnDisk(const std::wstring& devicePath)
 {
     DWORD diskNumber = 0;
@@ -152,6 +186,7 @@ static std::wstring FindDriveLetterOnDisk(const std::wstring& devicePath)
     return {};
 }
 
+// Parse WinSAT output and convert selected metrics into structured DiskTestResult entries.
 static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector<DiskTestResult>& results)
 {
     std::wistringstream stream(winsatOutput);
@@ -166,6 +201,36 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         return text;
     };
 
+    auto extractValueAfterLabel = [&](const std::wstring& label) {
+        size_t pos = line.find(label);
+        if (pos == std::wstring::npos)
+            return std::wstring();
+
+        size_t valueStart = line.find_first_of(L"0123456789", pos + label.size());
+        if (valueStart == std::wstring::npos)
+            return std::wstring();
+
+        std::wstring valueText = trim(line.substr(valueStart));
+        std::wistringstream tokenStream(valueText);
+        std::wstring number;
+        std::wstring unit;
+
+        if (!(tokenStream >> number))
+            return std::wstring();
+
+        if (tokenStream >> unit)
+        {
+            // If the next token looks like a score rather than a unit, ignore it.
+            bool nextIsScore = !unit.empty() && std::iswdigit(unit.front()) && unit.find_first_not_of(L"0123456789.") == std::wstring::npos;
+            if (nextIsScore)
+                return number;
+
+            return number + L" " + unit;
+        }
+
+        return number;
+    };
+
     while (std::getline(stream, line))
     {
         if (line.empty())
@@ -176,7 +241,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Random 16.0 Read";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(line.rfind(L"Disk  Random 16.0 Read", 0) == 0 ? L"Disk  Random 16.0 Read" : L"Disk Random 16.0 Read");
             results.push_back(metric);
             found = true;
         }
@@ -184,7 +249,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Sequential 64.0 Read";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(line.rfind(L"Disk  Sequential 64.0 Read", 0) == 0 ? L"Disk  Sequential 64.0 Read" : L"Disk Sequential 64.0 Read");
             results.push_back(metric);
             found = true;
         }
@@ -192,7 +257,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Sequential 64.0 Write";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(line.rfind(L"Disk  Sequential 64.0 Write", 0) == 0 ? L"Disk  Sequential 64.0 Write" : L"Disk Sequential 64.0 Write");
             results.push_back(metric);
             found = true;
         }
@@ -200,7 +265,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Latency 95th Percentile";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(L"Latency: 95th Percentile");
             results.push_back(metric);
             found = true;
         }
@@ -208,7 +273,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Latency Maximum";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(L"Latency: Maximum");
             results.push_back(metric);
             found = true;
         }
@@ -216,7 +281,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Avg Read Time Seq Writes";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(L"Average Read Time with Sequential Writes");
             results.push_back(metric);
             found = true;
         }
@@ -224,7 +289,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
         {
             DiskTestResult metric;
             metric.testName = L"WinSAT Avg Read Time Random Writes";
-            metric.result = trim(line.substr(line.find_first_of(L"0123456789")));
+            metric.result = extractValueAfterLabel(L"Average Read Time with Random Writes");
             results.push_back(metric);
             found = true;
         }
@@ -233,6 +298,7 @@ static bool AddParsedWinSATResults(const std::wstring& winsatOutput, std::vector
     return found;
 }
 
+// Execute WinSAT for the selected logical drive and capture its text output.
 static bool RunWinSATCommand(const std::wstring& driveLetter, std::wstring& result)
 {
     if (driveLetter.empty())
@@ -251,6 +317,7 @@ static bool RunWinSATCommand(const std::wstring& driveLetter, std::wstring& resu
     return true;
 }
 
+// Query the disk's performance counters directly via IOCTL_DISK_PERFORMANCE.
 static bool QueryDiskPerformance(HANDLE diskHandle, std::vector<DiskTestResult>& results)
 {
     DISK_PERFORMANCE before = {};
@@ -321,6 +388,7 @@ static bool QueryDiskPerformance(HANDLE diskHandle, std::vector<DiskTestResult>&
     return true;
 }
 
+// Check whether the disk supports SMART monitoring.
 static bool QuerySmartSupport(HANDLE diskHandle, std::vector<DiskTestResult>& results)
 {
     DWORD returned = 0;
@@ -355,6 +423,7 @@ static std::wstring EscapeWmicDeviceId(const std::wstring& devicePath)
     return escaped;
 }
 
+// Run WMIC to collect diskdrive metadata and add it to the result list.
 static void QueryWmicDiskDriveInfo(const std::wstring& devicePath, std::vector<DiskTestResult>& results)
 {
     std::wstring command = L"cmd.exe /C wmic diskdrive get Caption,Model,Manufacturer,Partitions,Size,SerialNumber,Status,DeviceID /format:list";
@@ -375,6 +444,7 @@ static void QueryWmicDiskDriveInfo(const std::wstring& devicePath, std::vector<D
     }
 }
 
+// Run FSUTIL to list mounted drive letters, for additional disk path context.
 static void QueryFsutilInfo(std::vector<DiskTestResult>& results)
 {
     std::wstring output;
@@ -394,6 +464,7 @@ static void QueryFsutilInfo(std::vector<DiskTestResult>& results)
     }
 }
 
+// Main disk analysis entry point. This runs all supported checks for the selected disk.
 std::vector<DiskTestResult> AnalyzeDisk(const DiskInfo& disk)
 {
     std::vector<DiskTestResult> results;
@@ -442,11 +513,13 @@ std::vector<DiskTestResult> AnalyzeDisk(const DiskInfo& disk)
         results.push_back(sizeTest);
     }
 
+    // Run the supported disk checks and collect the results.
     QuerySmartSupport(hDisk, results);
     QueryDiskPerformance(hDisk, results);
     QueryWmicDiskDriveInfo(disk.path, results);
     QueryFsutilInfo(results);
 
+    // Find a mounted partition on this physical disk and run WinSAT against it.
     std::wstring driveLetter = FindDriveLetterOnDisk(disk.path);
     std::wstring winsatResult;
     if (RunWinSATCommand(driveLetter, winsatResult))
