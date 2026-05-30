@@ -32,8 +32,3 @@ cmake --build build --config Release
 ## Run
 
 After building, run the executable from `build\Release\DiskAnalyzer.exe`.
-
-## Notes
-
-- The app uses `build/` for generated build files.
-- A `.gitignore` is included to exclude the build output.
